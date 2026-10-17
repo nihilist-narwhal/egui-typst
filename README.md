@@ -14,6 +14,10 @@ A snippet that does not compile is shown as its error message instead of crashin
 scales are range-checked; Typst's file ids (interned for good, 65,535 at most) are reused through
 one main file, so rendering thousands of snippets does not run out.
 
+## Manual
+
+[`manual/egui_typst.pdf`](manual/egui_typst.pdf) (16 pages, written in Typst: `manual/egui_typst.typ`) mixes usage tips with the mathematics: choosing a backend, theming and caching, hostile input, how glyphs become triangles, why the feathered edge is a half-pixel ramp, and how each claim was measured.
+
 ## Try it
 
 ```sh
