@@ -1,6 +1,6 @@
 //! `cargo run --release --example gallery`: a few formulas in a window, with a light/dark switch.
 
-use egui_typst::Typst;
+use egui_typst::{Backend, Typst};
 
 const FORMULAS: &[(&str, &str)] = &[
     (
@@ -32,10 +32,13 @@ const FORMULAS: &[(&str, &str)] = &[
 
 struct Gallery {
     dark: bool,
+    svg: bool,
+    zoom: f32,
 }
 
 impl eframe::App for Gallery {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.ctx().set_zoom_factor(self.zoom);
         ui.ctx().set_visuals(if self.dark {
             egui::Visuals::dark()
         } else {
@@ -45,12 +48,19 @@ impl eframe::App for Gallery {
             ui.horizontal(|ui| {
                 ui.heading("egui_typst");
                 ui.checkbox(&mut self.dark, "dark");
+                ui.checkbox(&mut self.svg, "svg (off: raster)");
+                ui.add(egui::Slider::new(&mut self.zoom, 0.5..=4.0).text("zoom"));
             });
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (title, snippet) in FORMULAS {
                     ui.label(egui::RichText::new(*title).weak());
-                    ui.add(Typst::new(snippet).size(18.0));
+                    let backend = if self.svg {
+                        Backend::Svg
+                    } else {
+                        Backend::Raster
+                    };
+                    ui.add(Typst::new(snippet).size(18.0).backend(backend));
                     ui.add_space(10.0);
                 }
             });
@@ -62,6 +72,12 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "egui_typst gallery",
         eframe::NativeOptions::default(),
-        Box::new(|_| Ok(Box::new(Gallery { dark: false }))),
+        Box::new(|_| {
+            Ok(Box::new(Gallery {
+                dark: false,
+                svg: true,
+                zoom: 1.0,
+            }))
+        }),
     )
 }

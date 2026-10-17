@@ -10,8 +10,11 @@ egui = "0.37"
 typst = "0.15"
 typst-layout = "0.15"
 typst-render = "0.15"
+typst-svg = "0.15"
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 typst-assets = { version = "0.15", features = ["fonts"] }
 
 [dev-dependencies]
 eframe = "0.37"
 png = "0.17"
+resvg = "0.45"

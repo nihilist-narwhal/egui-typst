@@ -23,9 +23,15 @@ cargo run --release --example render_png -- '$ x^2 $' x.png --dark      # no win
 
 ## Plan
 
-1. **Raster** (this): Typst -> `typst-render` pixmap -> egui texture, cached per
-   snippet/colour/size/scale. Done.
-2. **SVG**: compile to SVG and feed egui's image loaders; scales without re-rendering.
+1. **Raster**: Typst -> `typst-render` pixmap -> egui texture, cached per
+   snippet/colour/size/scale. Done (`Backend::Raster`).
+2. **SVG** (the default, `Backend::Svg`): compile once to SVG with a placeholder text colour; a
+   theme change swaps the colour in the string (no recompile) and egui's SVG loader (resvg)
+   rasterises at the size and zoom on screen. Done. Checked against the raster two ways: the SVG
+   rasterised with resvg differs from Typst's own raster by 0.7 to 2.1 of 255 in mean alpha on
+   three real snippets, and through egui's loader (a frame run, no GPU) the uploaded texture has
+   the right size, the requested colour on 95%+ of its visible pixels and the same ink as the
+   raster within 1%.
 3. **Native vector**: walk Typst's laid-out frame (glyph outlines, rules, shapes) into egui `Mesh`
    triangles. Egui's path fill is convex-only and glyph outlines are not, so outlines get
    triangulated first (a fix inside `epaint` is the case for forking egui, if it comes to that).
