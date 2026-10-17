@@ -1,0 +1,17 @@
+[package]
+name = "egui_typst"
+version = "0.0.1"
+edition = "2024"
+description = "Typst math and markup in egui: compile once, draw natively (experimental)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+egui = "0.37"
+typst = "0.15"
+typst-layout = "0.15"
+typst-render = "0.15"
+typst-assets = { version = "0.15", features = ["fonts"] }
+
+[dev-dependencies]
+eframe = "0.37"
+png = "0.17"
