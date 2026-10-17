@@ -1,3 +1,4 @@
 target/
 *.png
 Cargo.lock
+!manual/figures/*.png
