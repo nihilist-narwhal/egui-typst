@@ -333,6 +333,22 @@ impl World for Compiler {
     }
 }
 
+/// Escapes text so that Typst *markup* shows it literally: every ASCII punctuation character gets a
+/// backslash (Typst reads `\X` as the character `X`), so `#`, `$`, `*`, `_`, `@`, `<`, `` ` `` and
+/// the rest cannot start code, math, emphasis, references or labels. Use it for any text you do not
+/// control, before embedding it in a snippet: snippets are Typst code, and code can be slow
+/// (`#range(100000000).len()` takes seconds). It is for markup, not for use inside `$ ... $`.
+pub fn escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    for c in text.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Renders with a process-wide [`Compiler`] (built on first use). Fine for a demo; own a
 /// [`Compiler`] when you care about when the fonts load.
 pub fn render(snippet: &str, style: &Style) -> Result<ColorImage, Error> {
