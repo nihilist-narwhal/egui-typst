@@ -98,3 +98,37 @@ fn hostile_input_is_an_error_not_a_panic() -> Result<()> {
     let _ = vector.mesh_with_feather(-1.0, Color32::BLACK);
     Ok(())
 }
+
+#[test]
+fn a_hard_edged_mesh_still_draws_the_glyphs() -> Result<()> {
+    // `mesh_with_feather(0.0)` once drew nothing (a zero tolerance made lyon refuse the fill), so
+    // the "hard edge" error was just the error of a blank picture: it did not change with scale.
+    // A real hard-edged mesh covers about as much ink as the reference, and its error shrinks as
+    // the scale grows.
+    let compiler = Compiler::new()?;
+    let snippet = SNIPPETS[0];
+    let mut previous = f64::MAX;
+    for ppp in [1.0_f32, 2.0, 3.0] {
+        let style = Style {
+            pixels_per_point: ppp,
+            ..Style::default()
+        };
+        let reference = compiler.render(snippet, &style)?;
+        let vector = compiler.vector(snippet, style.size_pt, style.margin_pt)?;
+        let mesh = vector.mesh_with_feather(0.0, Color32::BLACK);
+        let drawn = rasterise_alpha(&mesh, ppp, reference.size[0], reference.size[1]);
+        let ink: f64 = drawn.iter().map(|a| f64::from(*a)).sum();
+        let want: f64 = reference.pixels.iter().map(|p| f64::from(p.a())).sum();
+        assert!(
+            ink > 0.7 * want && ink < 1.3 * want,
+            "{ppp}x: {ink:.0} ink against {want:.0}"
+        );
+        let error = difference(&compiler, snippet, ppp, Some(0.0))?;
+        assert!(
+            error < previous,
+            "{ppp}x: the hard-edge error should shrink with scale ({error:.3} after {previous:.3})"
+        );
+        previous = error;
+    }
+    Ok(())
+}

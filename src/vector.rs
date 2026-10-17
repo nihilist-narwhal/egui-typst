@@ -593,7 +593,8 @@ fn fill_mesh(mesh: &mut Mesh, contours: &[Vec<[f32; 2]>], color: Color32, feathe
     }
     let path = builder.build();
     let mut buffers: VertexBuffers<Point, u32> = VertexBuffers::new();
-    let options = FillOptions::non_zero().with_tolerance(feather / 8.0);
+    // the contours are already flattened polygons, so the tolerance only has to be valid (> 0)
+    let options = FillOptions::non_zero().with_tolerance(0.01);
     if FillTessellator::new()
         .tessellate_path(
             &path,

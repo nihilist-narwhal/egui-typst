@@ -38,14 +38,18 @@ cargo run --release --example render_png -- '$ x^2 $' x.png --dark      # no win
    feathered by hand: the opaque interior is inset by half a device pixel and a one-pixel ring
    ramps alpha from 1 to 0 across the true edge. Done, and no fork of egui was needed.
    Checked with a CPU rasteriser that draws a mesh the way a GPU does without multisampling
-   (`egui_typst::debug`), against Typst's own raster, mean alpha difference out of 255:
+   (`egui_typst::debug`), against Typst's own raster, mean alpha difference out of 255 (four
+   formulas; the range over them):
 
    | scale | hard edges | feathered |
    |---|---|---|
-   | 1x | 11.9 to 28.2 | 2.8 to 7.6 |
-   | 2x | 11.9 to 28.3 | 0.7 to 1.8 |
-   | 3x | 12.0 to 28.5 | 0.4 to 1.2 |
+   | 1x | 7.6 to 19.0 | 2.8 to 7.6 |
+   | 2x | 3.6 to 8.2 | 0.7 to 1.8 |
+   | 3x | 2.7 to 6.1 | 0.45 to 1.2 |
 
+   Feathering lowers the error 2.6x (1x) to 6x (3x) on the TVaR formula. (An earlier version of
+   this table reported hard edges as 12 to 28 at every scale: `mesh_with_feather(0.0)` was drawing
+   nothing, and the number was the error of a blank picture. Fixed, with a regression test.)
    At 2x and up (every Retina screen) the vector output is as close to Typst's raster as the SVG
    is. Small text at 1x is the weak case: strokes thinner than a pixel make the inset collapse.
    The half-pixel inset is the optimum (0.35 and 0.7 were measurably worse). Not drawn, and

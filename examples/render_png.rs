@@ -1,8 +1,8 @@
 //! `cargo run --release --example render_png -- 'SNIPPET' out.png [--dark] [--scale 3]
-//!  [--backend raster|svg|vector] [--wire]`
+//!  [--backend raster|svg|vector] [--wire] [--hard]`
 //! Renders one Typst snippet to a PNG (handy for looking at output without a window). The vector
 //! backend is drawn by a small CPU rasteriser the way a GPU would without multisampling; `--wire`
-//! overlays its triangles.
+//! overlays its triangles, and `--hard` draws it without the feathered edge (aliased).
 
 use std::error::Error;
 use std::fs::File;
@@ -21,12 +21,14 @@ enum Backend {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut positional = Vec::new();
-    let (mut dark, mut wire, mut scale, mut backend) = (false, false, 3.0_f32, Backend::Raster);
+    let (mut dark, mut wire, mut hard, mut scale, mut backend) =
+        (false, false, false, 3.0_f32, Backend::Raster);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--dark" => dark = true,
             "--wire" => wire = true,
+            "--hard" => hard = true,
             "--scale" => scale = args.next().ok_or("--scale N")?.parse()?,
             "--backend" => {
                 backend = match args.next().ok_or("--backend raster|svg|vector")?.as_str() {
@@ -40,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let [snippet, out] = <[String; 2]>::try_from(positional)
-        .map_err(|_| "usage: render_png 'SNIPPET' out.png [--dark] [--scale N] [--backend raster|svg|vector] [--wire]")?;
+        .map_err(|_| "usage: render_png 'SNIPPET' out.png [--dark] [--scale N] [--backend raster|svg|vector] [--wire] [--hard]")?;
     let color = if dark {
         Color32::from_gray(235)
     } else {
@@ -97,7 +99,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         Backend::Vector => {
             let vector = compiler.vector(&snippet, style.size_pt, style.margin_pt)?;
-            let mesh = vector.mesh(scale, Color32::BLACK);
+            let mesh = if hard {
+                vector.mesh_with_feather(0.0, Color32::BLACK)
+            } else {
+                vector.mesh(scale, Color32::BLACK)
+            };
             let (w, h) = (
                 (vector.size_pt[0] * scale).round() as usize,
                 (vector.size_pt[1] * scale).round() as usize,
