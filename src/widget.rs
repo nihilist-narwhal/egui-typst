@@ -18,7 +18,7 @@ use egui::{
     TextureOptions, Ui, Vec2, Widget, load::Bytes,
 };
 
-use crate::{Compiler, Style, Svg, Vector};
+use crate::{Compiler, MAX_PIXELS, MAX_SIDE_PX, Style, Svg, Vector};
 
 /// Most snippets kept per context and kind; past this the cache starts over (a theme change or a
 /// zoom re-renders everything on screen anyway).
@@ -257,6 +257,19 @@ fn draw_svg(
         Compiled::Ready(svg) => svg,
         Compiled::Failed(why) => return failed(ui, why),
     };
+
+    // the loader rasterises at the size on screen: refuse a page that would be an enormous texture
+    let scale = ctx.pixels_per_point();
+    let (px_w, px_h) = (svg.size_pt[0] * scale, svg.size_pt[1] * scale);
+    if px_w > MAX_SIDE_PX as f32
+        || px_h > MAX_SIDE_PX as f32
+        || f64::from(px_w) * f64::from(px_h) > MAX_PIXELS as f64
+    {
+        return failed(
+            ui,
+            format!("the snippet would be {px_w:.0}x{px_h:.0} pixels at this scale"),
+        );
+    }
 
     let [r, g, b, a] = color.to_srgba_unmultiplied();
     let tint_key = TintKey {

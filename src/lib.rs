@@ -1,20 +1,31 @@
 //! Typst math and markup in egui (experimental).
 //!
-//! Milestone 1: compile a Typst snippet once and rasterise it into an [`egui::ColorImage`], ready to
-//! upload as a texture. The snippet is typeset on an auto-sized, margin-light page whose text is
-//! the colour you pass, so a formula follows the UI theme (re-render when the theme changes).
+//! Compile a Typst snippet once, cache it, draw it; the formula follows the UI theme and scale.
+//! In a UI, add the [`Typst`] widget:
 //!
 //! ```no_run
-//! let image = egui_typst::render(
-//!     "$ \"TVaR\"_alpha (L) = 1/(1-alpha) integral_alpha^1 \"VaR\"_u (L) dif u $",
-//!     &egui_typst::Style::default(),
-//! );
-//! assert!(image.is_ok());
+//! # fn ui(ui: &mut egui::Ui) {
+//! ui.add(egui_typst::Typst::new(
+//!     r#"$ "TVaR"_alpha (L) = 1/(1-alpha) integral_alpha^1 "VaR"_u (L) dif u $"#,
+//! ).size(18.0));
+//! # }
 //! ```
 //!
-//! One [`Compiler`] holds the fonts and the library, which are expensive to build; keep it for the
-//! life of the program. Typst interns every file id for good (65,535 at most), so the compiler
-//! reuses a single id and swaps the source text in and out rather than minting one per snippet.
+//! Three [`Backend`]s draw the same page: [`Backend::Svg`] (the default; recolouring is a string
+//! swap), [`Backend::Vector`] (glyph outlines triangulated into egui meshes, anti-aliased by a
+//! feathered ring) and [`Backend::Raster`] (Typst's own rasteriser, the reference the others are
+//! tested against).
+//!
+//! Below the widget is the [`Compiler`]: it holds the fonts and the library, which are expensive
+//! to build, so keep one for the life of the program. It is `Send + Sync`; compilations are
+//! serialised by an internal lock because there is one main file (Typst interns every file id for
+//! good, 65,535 at most, so the compiler reuses a single id and swaps the source text in and out
+//! rather than minting one per snippet).
+//!
+//! ```no_run
+//! let image = egui_typst::render("$ x^2 $", &egui_typst::Style::default());
+//! assert!(image.is_ok());
+//! ```
 
 #[doc(hidden)]
 pub mod debug;
@@ -94,6 +105,9 @@ impl std::error::Error for Error {}
 /// Most pixels along one side of a rendered snippet.
 pub const MAX_SIDE_PX: u32 = 8_192;
 
+/// Most pixels in all of a rendered snippet (32 mega-pixels: 128 MiB of RGBA).
+pub const MAX_PIXELS: u64 = 32 * 1024 * 1024;
+
 /// The placeholder text colour an [`Svg`] is compiled with (`#010203`); [`Svg::tinted`] replaces it.
 pub const SENTINEL: Color32 = Color32::from_rgb(1, 2, 3);
 const SENTINEL_HEX: &str = "#010203";
@@ -125,6 +139,10 @@ pub struct Compiler {
     fonts: Vec<Font>,
     main: FileId,
     source: Mutex<Source>,
+    /// Held for a whole compile: there is one main file, so only one snippet may be in it at a
+    /// time. (Releasing it between swapping the text in and compiling lets another thread
+    /// overwrite the text first; see `tests/threads.rs`.)
+    gate: Mutex<()>,
 }
 
 impl Compiler {
@@ -146,6 +164,7 @@ impl Compiler {
             fonts,
             main,
             source: Mutex::new(Source::new(main, String::new())),
+            gate: Mutex::new(()),
         })
     }
 
@@ -200,17 +219,20 @@ impl Compiler {
     pub fn vector(&self, snippet: &str, size_pt: f32, margin_pt: f32) -> Result<Vector, Error> {
         let document = self.typeset(snippet, SENTINEL, size_pt, margin_pt)?;
         let page = document.pages().first().ok_or(Error::Empty)?;
-        let vector = Vector::from_frame(&page.frame);
-        if !vector
-            .size_pt
+        let size = [
+            page.frame.width().to_pt() as f32,
+            page.frame.height().to_pt() as f32,
+        ];
+        if !size
             .iter()
             .all(|s| s.is_finite() && *s > 0.0 && *s <= MAX_SIDE_PX as f32)
         {
             return Err(Error::TooLarge {
-                width: vector.size_pt[0].min(u32::MAX as f32) as u32,
-                height: vector.size_pt[1].min(u32::MAX as f32) as u32,
+                width: size[0].clamp(0.0, u32::MAX as f32) as u32,
+                height: size[1].clamp(0.0, u32::MAX as f32) as u32,
             });
         }
+        let vector = Vector::from_frame(&page.frame);
         Ok(vector)
     }
 
@@ -221,6 +243,20 @@ impl Compiler {
         }
         let document = self.typeset(snippet, style.color, style.size_pt, style.margin_pt)?;
         let page = document.pages().first().ok_or(Error::Empty)?;
+        // refuse before rasterising: Typst allocates the whole pixmap up front, and a page of
+        // 1e6 pt (`#box(width: 1e6pt)`) would ask for terabytes and abort the process
+        let width = (page.frame.width().to_pt() * f64::from(style.pixels_per_point)).ceil();
+        let height = (page.frame.height().to_pt() * f64::from(style.pixels_per_point)).ceil();
+        if !(width.is_finite() && height.is_finite())
+            || width > f64::from(MAX_SIDE_PX)
+            || height > f64::from(MAX_SIDE_PX)
+            || width * height > MAX_PIXELS as f64
+        {
+            return Err(Error::TooLarge {
+                width: width.clamp(0.0, f64::from(u32::MAX)) as u32,
+                height: height.clamp(0.0, f64::from(u32::MAX)) as u32,
+            });
+        }
         let options = RenderOptions {
             pixel_per_pt: Scalar::new(f64::from(style.pixels_per_point)),
             ..RenderOptions::default()
@@ -238,6 +274,11 @@ impl Compiler {
     }
 
     fn compile(&self, text: &str) -> Result<PagedDocument, Error> {
+        let _gate = self
+            .gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        debug::COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         {
             let mut source = self
                 .source

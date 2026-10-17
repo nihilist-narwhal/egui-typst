@@ -167,23 +167,20 @@ impl Contours {
         }
     }
 
+    /// Flattens the cubic from the current point through `c1`, `c2` to `p`, into `n` equal steps in
+    /// the parameter. Wang's bound: the curve strays from its polyline by at most
+    /// `(3 / 4) * M / n^2` where `M` is the larger second difference of the control points,
+    /// `|P0 - 2 P1 + P2|` and `|P1 - 2 P2 + P3|`; so `n = ceil(sqrt(0.75 M / tolerance))`.
     fn cubic_to(&mut self, c1: [f32; 2], c2: [f32; 2], p: [f32; 2]) {
         let Some(&p0) = self.current.last() else {
             return;
         };
-        // how far the control points stray from the chord bounds the flattening error
-        let chord = [p[0] - p0[0], p[1] - p0[1]];
-        let chord_len = (chord[0] * chord[0] + chord[1] * chord[1]).sqrt();
-        let deviation = |c: [f32; 2]| {
-            let v = [c[0] - p0[0], c[1] - p0[1]];
-            if chord_len < 1e-6 {
-                (v[0] * v[0] + v[1] * v[1]).sqrt()
-            } else {
-                (v[0] * chord[1] - v[1] * chord[0]).abs() / chord_len
-            }
+        let second = |a: [f32; 2], b: [f32; 2], c: [f32; 2]| {
+            let (dx, dy) = (a[0] - 2.0 * b[0] + c[0], a[1] - 2.0 * b[1] + c[1]);
+            (dx * dx + dy * dy).sqrt()
         };
-        let d = deviation(c1).max(deviation(c2));
-        let n = ((0.75 * d / FLATTEN_TOLERANCE_PT).sqrt().ceil() as usize).clamp(1, MAX_SEGMENTS);
+        let m = second(p0, c1, c2).max(second(c1, c2, p));
+        let n = ((0.75 * m / FLATTEN_TOLERANCE_PT).sqrt().ceil() as usize).clamp(1, MAX_SEGMENTS);
         for i in 1..=n {
             let t = i as f32 / n as f32;
             let u = 1.0 - t;
@@ -640,5 +637,85 @@ fn fill_mesh(mesh: &mut Mesh, contours: &[Vec<[f32; 2]>], color: Color32, feathe
             );
             mesh.indices.extend([a, b, c, a, c, d]);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A small deterministic generator (a 64-bit LCG), so the test needs no dependency.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> f32 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((self.0 >> 40) as f32) / (1u64 << 24) as f32
+        }
+    }
+
+    fn distance_to_segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+        let (ab, ap) = ([b[0] - a[0], b[1] - a[1]], [p[0] - a[0], p[1] - a[1]]);
+        let len2 = ab[0] * ab[0] + ab[1] * ab[1];
+        let t = if len2 > 0.0 {
+            ((ap[0] * ab[0] + ap[1] * ab[1]) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let q = [a[0] + t * ab[0], a[1] + t * ab[1]];
+        ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()
+    }
+
+    /// The largest distance from the true curve to its flattening, over `samples` points.
+    fn flattening_error(p: [[f32; 2]; 4], samples: usize) -> (f32, usize) {
+        let mut out = Contours::new();
+        out.push(p[0]);
+        out.cubic_to(p[1], p[2], p[3]);
+        let polyline = &out.current;
+        let mut worst = 0.0_f32;
+        for i in 0..=samples {
+            let t = i as f32 / samples as f32;
+            let u = 1.0 - t;
+            let (w0, w1, w2, w3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            let on_curve = [
+                w0 * p[0][0] + w1 * p[1][0] + w2 * p[2][0] + w3 * p[3][0],
+                w0 * p[0][1] + w1 * p[1][1] + w2 * p[2][1] + w3 * p[3][1],
+            ];
+            let d = polyline
+                .windows(2)
+                .map(|s| distance_to_segment(on_curve, s[0], s[1]))
+                .fold(f32::MAX, f32::min);
+            worst = worst.max(d);
+        }
+        (worst, polyline.len() - 1)
+    }
+
+    #[test]
+    fn flattening_stays_within_the_tolerance() {
+        let mut rng = Lcg(7);
+        let (mut worst_ratio, mut capped) = (0.0_f32, 0_usize);
+        for _ in 0..3_000 {
+            let mut point = || [rng.next() * 60.0, rng.next() * 60.0];
+            let p = [point(), point(), point(), point()];
+            let (error, segments) = flattening_error(p, 400);
+            let ratio = error / FLATTEN_TOLERANCE_PT;
+            if segments == MAX_SEGMENTS {
+                // a curve this wild hits the cap on segments (which bounds the work a hostile
+                // snippet can ask for), so the tolerance is not promised
+                capped += 1;
+                continue;
+            }
+            worst_ratio = worst_ratio.max(ratio);
+            assert!(
+                ratio <= 1.0,
+                "{p:?}: error {error} with {segments} segments is {ratio:.2}x the tolerance"
+            );
+        }
+        println!(
+            "worst flattening error / tolerance: {worst_ratio:.3} over {} random cubics ({capped} hit the cap)",
+            3_000 - capped
+        );
     }
 }

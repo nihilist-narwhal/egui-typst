@@ -1,6 +1,16 @@
 //! Helpers for looking at meshes without a GPU. Not part of the supported API.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use egui::Mesh;
+
+pub(crate) static COMPILES: AtomicUsize = AtomicUsize::new(0);
+
+/// How many Typst compilations this process has run (every backend, every snippet): what the
+/// caches are there to avoid.
+pub fn compile_count() -> usize {
+    COMPILES.load(Ordering::Relaxed)
+}
 
 /// Coverage (alpha, 0 to 255) of `mesh` on a `width` x `height` pixel grid at `scale` pixels per
 /// point, drawn the way a GPU draws without multisampling: a pixel is painted when its centre is
