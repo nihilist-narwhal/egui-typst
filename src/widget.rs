@@ -14,11 +14,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use egui::{
-    Color32, Image, Response, RichText, TextStyle, TextureHandle, TextureOptions, Ui, Vec2, Widget,
-    load::Bytes,
+    Color32, Image, Mesh, Response, RichText, Sense, Shape, TextStyle, TextureHandle,
+    TextureOptions, Ui, Vec2, Widget, load::Bytes,
 };
 
-use crate::{Compiler, Style, Svg};
+use crate::{Compiler, Style, Svg, Vector};
 
 /// Most snippets kept per context and kind; past this the cache starts over (a theme change or a
 /// zoom re-renders everything on screen anyway).
@@ -32,6 +32,10 @@ pub enum Backend {
     Svg,
     /// Typst's rasteriser, at the context's `pixels_per_point`.
     Raster,
+    /// Glyph outlines and rules triangulated into egui meshes ([`crate::Vector`]): sharp at any
+    /// zoom without a texture, recoloured per frame for free. A mesh is built per scale and
+    /// colour and copied (translated) each frame, so very large formulas cost more than a texture.
+    Vector,
 }
 
 /// A Typst snippet as a widget. Wrap math in `$ … $` (display) or `$…$` (inline).
@@ -116,6 +120,22 @@ struct Inner {
     raster: HashMap<RasterKey, Raster>,
     compiled: HashMap<SvgKey, Compiled>,
     tinted: HashMap<TintKey, Tinted>,
+    vectors: HashMap<SvgKey, Polygons>,
+    meshes: HashMap<MeshKey, Arc<Mesh>>,
+}
+
+#[derive(Clone)]
+enum Polygons {
+    Ready(Arc<Vector>),
+    Failed(String),
+}
+
+/// A mesh depends on the scale (the anti-aliasing ring is a device pixel wide) and the colour.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct MeshKey {
+    vector: SvgKey,
+    color: [u8; 4],
+    scale: u32,
 }
 
 #[derive(Clone, Default)]
@@ -149,6 +169,7 @@ impl Widget for Typst<'_> {
         match self.backend {
             Backend::Raster => draw_raster(ui, &mut inner, self.snippet, color, size_pt),
             Backend::Svg => draw_svg(ui, &mut inner, self.snippet, color, size_pt),
+            Backend::Vector => draw_vector(ui, &mut inner, self.snippet, color, size_pt),
         }
     }
 }
@@ -273,4 +294,62 @@ fn draw_svg(
             .fit_to_exact_size(size)
             .tint(tint),
     )
+}
+
+fn draw_vector(
+    ui: &mut Ui,
+    inner: &mut Inner,
+    snippet: &str,
+    color: Color32,
+    size_pt: f32,
+) -> Response {
+    let scale = ui.ctx().pixels_per_point();
+    let key = SvgKey {
+        snippet: snippet.to_owned(),
+        size: size_pt.to_bits(),
+    };
+    if inner.vectors.len() >= MAX_CACHED && !inner.vectors.contains_key(&key) {
+        inner.vectors.clear();
+        inner.meshes.clear();
+    }
+    let polygons = inner
+        .vectors
+        .entry(key.clone())
+        .or_insert_with(|| match compiler() {
+            Err(why) => Polygons::Failed(why.clone()),
+            Ok(compiler) => match compiler.vector(snippet, size_pt, Style::default().margin_pt) {
+                Ok(vector) => Polygons::Ready(Arc::new(vector)),
+                Err(e) => Polygons::Failed(e.to_string()),
+            },
+        })
+        .clone();
+    let vector = match polygons {
+        Polygons::Ready(vector) => vector,
+        Polygons::Failed(why) => return failed(ui, why),
+    };
+
+    let mesh_key = MeshKey {
+        vector: key,
+        color: color.to_array(),
+        scale: scale.to_bits(),
+    };
+    if inner.meshes.len() >= MAX_CACHED && !inner.meshes.contains_key(&mesh_key) {
+        inner.meshes.clear();
+    }
+    let mesh = inner
+        .meshes
+        .entry(mesh_key)
+        .or_insert_with(|| Arc::new(vector.mesh(scale, color)))
+        .clone();
+
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(vector.size_pt[0], vector.size_pt[1]),
+        Sense::hover(),
+    );
+    if ui.is_rect_visible(rect) {
+        let mut placed = (*mesh).clone();
+        placed.translate(rect.min.to_vec2());
+        ui.painter().add(Shape::mesh(placed));
+    }
+    response
 }

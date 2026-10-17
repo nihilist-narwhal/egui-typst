@@ -16,8 +16,12 @@
 //! life of the program. Typst interns every file id for good (65,535 at most), so the compiler
 //! reuses a single id and swaps the source text in and out rather than minting one per snippet.
 
+#[doc(hidden)]
+pub mod debug;
+mod vector;
 mod widget;
 
+pub use vector::Vector;
 pub use widget::{Backend, Typst};
 
 use std::sync::Mutex;
@@ -189,6 +193,25 @@ impl Compiler {
             text,
             size_pt: size,
         })
+    }
+
+    /// Typesets `snippet` to polygons (glyph outlines, rules), text in the placeholder colour:
+    /// [`Vector::mesh`] triangulates them for a scale and colour.
+    pub fn vector(&self, snippet: &str, size_pt: f32, margin_pt: f32) -> Result<Vector, Error> {
+        let document = self.typeset(snippet, SENTINEL, size_pt, margin_pt)?;
+        let page = document.pages().first().ok_or(Error::Empty)?;
+        let vector = Vector::from_frame(&page.frame);
+        if !vector
+            .size_pt
+            .iter()
+            .all(|s| s.is_finite() && *s > 0.0 && *s <= MAX_SIDE_PX as f32)
+        {
+            return Err(Error::TooLarge {
+                width: vector.size_pt[0].min(u32::MAX as f32) as u32,
+                height: vector.size_pt[1].min(u32::MAX as f32) as u32,
+            });
+        }
+        Ok(vector)
     }
 
     /// Typesets `snippet` (Typst markup; wrap math in `$ … $`) and rasterises its page.

@@ -32,7 +32,7 @@ const FORMULAS: &[(&str, &str)] = &[
 
 struct Gallery {
     dark: bool,
-    svg: bool,
+    backend: Backend,
     zoom: f32,
 }
 
@@ -48,19 +48,20 @@ impl eframe::App for Gallery {
             ui.horizontal(|ui| {
                 ui.heading("egui_typst");
                 ui.checkbox(&mut self.dark, "dark");
-                ui.checkbox(&mut self.svg, "svg (off: raster)");
+                for (backend, label) in [
+                    (Backend::Svg, "svg"),
+                    (Backend::Vector, "vector"),
+                    (Backend::Raster, "raster"),
+                ] {
+                    ui.selectable_value(&mut self.backend, backend, label);
+                }
                 ui.add(egui::Slider::new(&mut self.zoom, 0.5..=4.0).text("zoom"));
             });
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (title, snippet) in FORMULAS {
                     ui.label(egui::RichText::new(*title).weak());
-                    let backend = if self.svg {
-                        Backend::Svg
-                    } else {
-                        Backend::Raster
-                    };
-                    ui.add(Typst::new(snippet).size(18.0).backend(backend));
+                    ui.add(Typst::new(snippet).size(18.0).backend(self.backend));
                     ui.add_space(10.0);
                 }
             });
@@ -75,7 +76,7 @@ fn main() -> eframe::Result {
         Box::new(|_| {
             Ok(Box::new(Gallery {
                 dark: false,
-                svg: true,
+                backend: Backend::Svg,
                 zoom: 1.0,
             }))
         }),

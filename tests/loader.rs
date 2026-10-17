@@ -4,7 +4,7 @@
 
 use std::error::Error;
 
-use egui::{Color32, ColorImage, Context, ImageData, Pos2, RawInput, Rect, TextureId, vec2};
+use egui::{Color32, ColorImage, Context, ImageData, Pos2, RawInput, Rect, Shape, TextureId, vec2};
 use egui_typst::{Backend, Compiler, Typst};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -125,6 +125,67 @@ fn both_backends_draw_about_the_same_ink() -> Result<()> {
     assert!(
         (svg - raster).abs() / raster < 0.03,
         "svg {svg:.0} vs raster {raster:.0}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_vector_backend_paints_a_mesh_in_the_requested_colour() -> Result<()> {
+    let ctx = Context::default();
+    ctx.set_pixels_per_point(2.0);
+    let red = Color32::from_rgb(255, 0, 0);
+    let mut meshes = Vec::new();
+    for _ in 0..3 {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 400.0))),
+            ..RawInput::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            ui.add(
+                Typst::new(SNIPPET)
+                    .size(24.0)
+                    .color(red)
+                    .backend(Backend::Vector),
+            );
+        });
+        meshes = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                Shape::Mesh(mesh) => Some(mesh.clone()),
+                _ => None,
+            })
+            .collect();
+    }
+    let mesh = meshes.first().ok_or("no mesh was painted")?;
+    assert!(
+        mesh.vertices.len() > 200,
+        "{} vertices",
+        mesh.vertices.len()
+    );
+
+    // opaque vertices are the requested colour; the ring's outer vertices are transparent
+    let opaque = mesh.vertices.iter().filter(|v| v.color.a() == 255).count();
+    assert!(opaque > 100);
+    assert!(
+        mesh.vertices
+            .iter()
+            .filter(|v| v.color.a() == 255)
+            .all(|v| v.color == red)
+    );
+
+    // it sits inside the widget's rectangle (the page size from the top-left of the panel)
+    let svg = Compiler::new()?.svg(SNIPPET, 24.0, 2.0)?;
+    let bounds = mesh.calc_bounds();
+    assert!(
+        bounds.width() <= svg.size_pt[0] + 1.0 && bounds.height() <= svg.size_pt[1] + 1.0,
+        "{bounds:?} vs {:?}",
+        svg.size_pt
+    );
+    assert!(
+        bounds.width() > svg.size_pt[0] * 0.8,
+        "the formula fills most of its page: {bounds:?} vs {:?}",
+        svg.size_pt
     );
     Ok(())
 }

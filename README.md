@@ -32,9 +32,26 @@ cargo run --release --example render_png -- '$ x^2 $' x.png --dark      # no win
    three real snippets, and through egui's loader (a frame run, no GPU) the uploaded texture has
    the right size, the requested colour on 95%+ of its visible pixels and the same ink as the
    raster within 1%.
-3. **Native vector**: walk Typst's laid-out frame (glyph outlines, rules, shapes) into egui `Mesh`
-   triangles. Egui's path fill is convex-only and glyph outlines are not, so outlines get
-   triangulated first (a fix inside `epaint` is the case for forking egui, if it comes to that).
+3. **Native vector** (`Backend::Vector`): walk Typst's laid-out frame (glyph outlines, rules,
+   shapes) into polygons, triangulate them with `lyon` (epaint fills convex shapes only and glyphs
+   are not), and emit `egui::Mesh`es. Nothing in egui anti-aliases a raw mesh, so edges are
+   feathered by hand: the opaque interior is inset by half a device pixel and a one-pixel ring
+   ramps alpha from 1 to 0 across the true edge. Done, and no fork of egui was needed.
+   Checked with a CPU rasteriser that draws a mesh the way a GPU does without multisampling
+   (`egui_typst::debug`), against Typst's own raster, mean alpha difference out of 255:
+
+   | scale | hard edges | feathered |
+   |---|---|---|
+   | 1x | 11.9 to 28.2 | 2.8 to 7.6 |
+   | 2x | 11.9 to 28.3 | 0.7 to 1.8 |
+   | 3x | 12.0 to 28.5 | 0.4 to 1.2 |
+
+   At 2x and up (every Retina screen) the vector output is as close to Typst's raster as the SVG
+   is. Small text at 1x is the weak case: strokes thinner than a pixel make the inset collapse.
+   The half-pixel inset is the optimum (0.35 and 0.7 were measurably worse). Not drawn, and
+   counted in `Vector::skipped`: images, gradients, tilings, colour glyphs, clipped groups, dashed
+   strokes. Math needs none of them. `cargo run --release --example render_png -- '$ alpha $'
+   a.png --backend vector --scale 14 --wire` shows the triangulation.
 4. Theme-aware colours without re-rendering, text selection and accessible alt text, inline math
    flowing with `RichText`.
 
